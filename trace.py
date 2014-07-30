@@ -5,6 +5,7 @@ import commands
 import optparse
 import shlex
 import threading
+import time
 
 def trace(debugger, command, result, internal_dict):
     target = debugger.GetSelectedTarget()
@@ -24,18 +25,27 @@ def trace(debugger, command, result, internal_dict):
     print >>result, '0x%x' % start_address.GetLoadAddress(target)
     instruction_list = symbol.GetInstructions(target)
     #print >>result, instruction_list
-    breakpoint = None
+    breakpoints = {}
     for i in instruction_list:
         print >>result, '0x%x' % i.GetAddress().GetLoadAddress(target)
         print >>result, '{}, {}, {}'.format(i.GetMnemonic(target), i.GetOperands(target), i.GetComment(target))
-        if i.GetAddress().GetLoadAddress(target) == 0x7fff892d3fcb:
-            print >>result, '=== This is the one'
-            breakpoint = target.BreakpointCreateByAddress(i.GetAddress().GetLoadAddress(target))
-    print >>result, breakpoint
+        mnemonic = i.GetMnemonic(target)
+        if mnemonic != None and mnemonic.startswith('call'):
+            address = i.GetAddress().GetLoadAddress(target)
+            print >>result, 'Putting breakpoint at 0x%lx' % address
+            breakpoint = target.BreakpointCreateByAddress(address)
+            breakpoint.SetThreadID(thread.GetThreadID())
+            breakpoints[address] = breakpoint
+    print >>result, breakpoints
 
     event = lldb.SBEvent()
-    listener = debugger.GetListener()
+    listener = lldb.SBListener("trace breakpoint listener")
     broadcaster = process.GetBroadcaster()
+    rc = broadcaster.AddListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
+    if not rc:
+        print >>result, 'Failed to add listener'
+        return
+
     print >>result, '=== a'
     class MyListeningThread(threading.Thread):
         def run(self):
@@ -44,13 +54,14 @@ def trace(debugger, command, result, internal_dict):
             # After that, the thread exits.
             while not count > 3:
                 print >>result, 'Try wait for event...'
-                if listener.WaitForEventForBroadcasterWithType(5,
+                if listener.WaitForEventForBroadcasterWithType(1,
                                                                broadcaster,
                                                                lldb.SBProcess.eBroadcastBitStateChanged,
                                                                event):
                     print >>result, '=== YEY'
-                    event.GetDescription(result)
                     print >>result, 'Event data flavor:', event.GetDataFlavor()
+                    print >>result, 'Event string:', lldb.SBEvent.GetCStringFromEvent(event)
+                    return
                 else:
                     print >>result, 'timeout occurred waiting for event...'
                 count = count + 1
@@ -64,6 +75,24 @@ def trace(debugger, command, result, internal_dict):
     print >>result, '=== e'
     my_thread.join()
     print >>result, '=== f'
+    # Some sanity checking
+    if thread.GetStopReason() != lldb.eStopReasonBreakpoint:
+        print >>result, thread
+        print >>result, "Thread under trace didn't stop due to a breakpoint"
+        return
+    frame = thread.GetFrameAtIndex(0)
+    stop_address = frame.GetPC()
+    print >>result, 'Stop address: 0x%lx' % stop_address
+    if not stop_address in breakpoints:
+        print >>result, "Unexpected stop address"
+        return
+    breakpoint = breakpoints[stop_address]
+    print >>result, 'Stopped on breakpoint:'
+    print >>result, breakpoint
+    for breakpoint in breakpoints.itervalues():
+        print >>result, 'Deleting breakpoint %d' % breakpoint.GetID()
+        target.BreakpointDelete(breakpoint.GetID())
+
 
 
 
