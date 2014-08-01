@@ -153,37 +153,28 @@ def trace(debugger, command, result, internal_dict):
     print >>result, thread
     frame = thread.GetSelectedFrame()
 
-    instrumented_frame = InstrumentedFrame(target, thread, frame, result)
-    instrumented_frame.instrument_calls()
+    instrumented_frames = []
+    while True:
+        instrumented_frame = InstrumentedFrame(target, thread, frame, result)
+        instrumented_frames.append(instrumented_frame)
 
-    print >>result, 'Instrumented all calls, running the process'
-    success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
-    if not success:
-        print >>result, "Failed to continue+stop the process"
-        return
+        instrumented_frame.instrument_calls()
+        print >>result, 'Instrumented all calls, running the process'
 
-    success = instrumented_frame.is_stopped_on_call_and_instrument_return()
-    if not success:
-        print >>result, "Failed to intrument call"
-        return
+        success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
+        if not success:
+            print >>result, "Failed to continue+stop the process"
+            return
 
-    thread.StepInto()
-    frame = thread.GetFrameAtIndex(0)
-    stop_address = frame.GetPC()
-    print >>result, 'Entered new frame at: 0x%lx' % stop_address
+        success = instrumented_frame.is_stopped_on_call_and_instrument_return()
+        if not success:
+            print >>result, "Failed to instrument call"
+            break
 
-    second_instrumented_frame = InstrumentedFrame(target, thread, frame, result)
-    second_instrumented_frame.instrument_calls()
-
-    success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
-    if not success:
-        print >>result, "Failed to continue+stop the process"
-        return
-
-    success = second_instrumented_frame.is_stopped_on_call_and_instrument_return()
-    if not success:
-        print >>result, "Failed to intrument call"
-        return
+        thread.StepInstruction(False)
+        frame = thread.GetFrameAtIndex(0)
+        stop_address = frame.GetPC()
+        print >>result, 'Entered new frame at: 0x%lx' % stop_address
 
     my_thread.exit()
     wait_event.set()
