@@ -45,29 +45,67 @@ class MyListeningThread(threading.Thread):
             print >>self.result, 'Listener thread got event, notifying'
             self.notify_event.set()
 
-def instrument_calls(target, thread, frame, result):
-    # TODO: symbols vs functions
-    print >>result, frame.GetFunction()
-    symbol = frame.GetSymbol()
-    print >>result, symbol
-    start_address = symbol.GetStartAddress()
-    print >>result, start_address
-    print >>result, '0x%x' % start_address.GetLoadAddress(target)
-    instruction_list = symbol.GetInstructions(target)
-    #print >>result, instruction_list
-    breakpoints = {}
-    for i in instruction_list:
-        print >>result, '0x%x' % i.GetAddress().GetLoadAddress(target)
-        print >>result, '{}, {}, {}'.format(i.GetMnemonic(target), i.GetOperands(target), i.GetComment(target))
-        mnemonic = i.GetMnemonic(target)
-        if mnemonic != None and mnemonic.startswith('call'):
-            address = i.GetAddress().GetLoadAddress(target)
-            print >>result, 'Putting breakpoint at 0x%lx' % address
-            breakpoint = target.BreakpointCreateByAddress(address)
-            breakpoint.SetThreadID(thread.GetThreadID())
-            breakpoints[address] = breakpoint
-    print >>result, breakpoints
-    return breakpoints
+class InstrumentedFrame:
+    def __init__(self, target, thread, frame, result):
+        self.target = target
+        self.thread = thread
+        self.frame = frame
+        self.result = result
+
+    def instrument_calls(self):
+        # TODO: symbols vs functions
+        print >>self.result, self.frame.GetFunction()
+        symbol = self.frame.GetSymbol()
+        print >>self.result, symbol
+        start_address = symbol.GetStartAddress()
+        print >>self.result, start_address
+        print >>self.result, '0x%x' % start_address.GetLoadAddress(self.target)
+        instruction_list = symbol.GetInstructions(self.target)
+        #print >>self.result, instruction_list
+        breakpoints = {}
+        subsequent_instruction = {}
+        previous_breakpoint_address = 0L
+        for i in instruction_list:
+            address = i.GetAddress().GetLoadAddress(self.target)
+            print >>self.result, '0x%x' % address
+            print >>self.result, '{}, {}, {}'.format(i.GetMnemonic(self.target), i.GetOperands(self.target), i.GetComment(self.target))
+            if previous_breakpoint_address != 0L:
+                subsequent_instruction[previous_breakpoint_address] = address
+                previous_breakpoint_address = 0L
+            mnemonic = i.GetMnemonic(self.target)
+            if mnemonic != None and mnemonic.startswith('call'):
+                print >>self.result, 'Putting breakpoint at 0x%lx' % address
+                breakpoint = self.target.BreakpointCreateByAddress(address)
+                breakpoint.SetThreadID(self.thread.GetThreadID())
+                breakpoints[address] = breakpoint
+                previous_breakpoint_address = address
+        print >>self.result, breakpoints
+        self.breakpoints = breakpoints
+        self.subsequent_instruction = subsequent_instruction
+
+    def clear_calls_instrumentation(self):
+        for breakpoint in self.breakpoints.itervalues():
+            print >>self.result, 'Deleting breakpoint %d' % breakpoint.GetID()
+            self.target.BreakpointDelete(breakpoint.GetID())
+
+    def instrument_call_return(self):
+        frame = self.thread.GetFrameAtIndex(0)
+        stop_address = frame.GetPC()
+        print >>self.result, 'Stop address: 0x%lx' % stop_address
+        if not stop_address in self.breakpoints:
+            return False
+
+        breakpoint = self.breakpoints[stop_address]
+        print >>self.result, 'Stopped on breakpoint:'
+        print >>self.result, breakpoint
+        if not stop_address in self.subsequent_instruction:
+            print >>self.result, "Couldn't find subsequent instruction"
+            return False
+        self.return_breakpoint = self.target.BreakpointCreateByAddress(self.subsequent_instruction[stop_address])
+        self.return_breakpoint.SetThreadID(self.thread.GetThreadID())
+        self.clear_calls_instrumentation()
+        return True
+
 
 def trace(debugger, command, result, internal_dict):
     wait_event = threading.Event()
@@ -85,15 +123,16 @@ def trace(debugger, command, result, internal_dict):
     rc = broadcaster.AddListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
     if not rc:
         print >>self.result, 'Failed to add listener'
- 
+
     my_thread = MyListeningThread(wait_event, notify_event, listener, result)
     my_thread.start()
     thread = process.GetSelectedThread()
     print >>result, thread
     frame = thread.GetSelectedFrame()
 
+    instrumented_frame = InstrumentedFrame(target, thread, frame, result)
+    instrumented_frame.instrument_calls()
 
-    breakpoints = instrument_calls(target, thread, frame, result)
     print >>result, 'Instrumented all calls, running process'
     print >>result, process.GetState()
     process.Continue()
@@ -115,18 +154,43 @@ def trace(debugger, command, result, internal_dict):
         print >>result, thread
         print >>result, "Thread under trace didn't stop due to a breakpoint"
         return
+    success = instrumented_frame.instrument_call_return()
+    if not success:
+        print >>result, "Failed to intrument call"
+        return
+
+    thread.StepInto()
     frame = thread.GetFrameAtIndex(0)
     stop_address = frame.GetPC()
-    print >>result, 'Stop address: 0x%lx' % stop_address
-    if not stop_address in breakpoints:
-        print >>result, "Unexpected stop address"
+    print >>result, 'Entered new frame at: 0x%lx' % stop_address
+
+    second_instrumented_frame = InstrumentedFrame(target, thread, frame, result)
+    second_instrumented_frame.instrument_calls()
+
+
+    print >>result, 'Instrumented all calls, running process'
+    print >>result, process.GetState()
+    process.Continue()
+    wait_event.set()
+    print >>result, 'Process continued, waiting for notification'
+    notify_event.wait()
+    notify_event.clear()
+    while process.GetState() != lldb.eStateStopped:
+        wait_event.set()
+        notify_event.wait()
+        notify_event.clear()
+    print >>result, 'Got notification, sanity checks follow'
+    print >>result, process.GetState()
+    # Some sanity checking
+    if my_thread.isExiting():
+        print >>result, 'Listener thread exited unexpectedly'
         return
-    breakpoint = breakpoints[stop_address]
-    print >>result, 'Stopped on breakpoint:'
-    print >>result, breakpoint
-    for breakpoint in breakpoints.itervalues():
-        print >>result, 'Deleting breakpoint %d' % breakpoint.GetID()
-        target.BreakpointDelete(breakpoint.GetID())
+    if thread.GetStopReason() != lldb.eStopReasonBreakpoint:
+        print >>result, thread
+        print >>result, "Thread under trace didn't stop due to a breakpoint"
+        return
+
+
     my_thread.exit()
     wait_event.set()
     my_thread.join()
