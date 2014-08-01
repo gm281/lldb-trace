@@ -8,11 +8,12 @@ import threading
 import time
 
 class MyListeningThread(threading.Thread):
-    def __init__(self, wait_event, notify_event, listener, result):
+    def __init__(self, wait_event, notify_event, listener, process, result):
         super(MyListeningThread, self).__init__()
         self.wait_event = wait_event
         self.notify_event = notify_event
         self.listener = listener
+        self.process = process
         self.result = result
         self.exiting = False
 
@@ -30,18 +31,22 @@ class MyListeningThread(threading.Thread):
                 print >>self.result, 'Listener thread was asked to exit, complying'
                 self.notify_event.set()
                 return
-            event = lldb.SBEvent()
-            print >>self.result, 'Listener thread waiting for an event'
-            wait_result = self.listener.WaitForEvent(10, event)
+            while True:
+                event = lldb.SBEvent()
+                print >>self.result, 'Listener thread waiting for an event'
+                wait_result = self.listener.WaitForEvent(10, event)
 
-            if not wait_result:
-                print >>self.result, 'Listener thread timed out waiting for notification'
-                self.exiting = True
-                self.notify_event.set()
-                return
-            print >>self.result, '=== YEY'
-            print >>self.result, 'Event data flavor:', event.GetDataFlavor()
-            print >>self.result, 'Event string:', lldb.SBEvent.GetCStringFromEvent(event)
+                if not wait_result:
+                    print >>self.result, 'Listener thread timed out waiting for notification'
+                    self.exiting = True
+                    self.notify_event.set()
+                    return
+                print >>self.result, '=== YEY'
+                print >>self.result, 'Event data flavor:', event.GetDataFlavor()
+                print >>self.result, 'Event string:', lldb.SBEvent.GetCStringFromEvent(event)
+                if self.process.GetState() == lldb.eStateStopped:
+                    break
+                print >>self.result, 'Process not stopped, listening for the next event'
             print >>self.result, 'Listener thread got event, notifying'
             self.notify_event.set()
 
@@ -88,7 +93,7 @@ class InstrumentedFrame:
             print >>self.result, 'Deleting breakpoint %d' % breakpoint.GetID()
             self.target.BreakpointDelete(breakpoint.GetID())
 
-    def instrument_call_return(self):
+    def is_stopped_on_call_and_instrument_return(self):
         frame = self.thread.GetFrameAtIndex(0)
         stop_address = frame.GetPC()
         print >>self.result, 'Stop address: 0x%lx' % stop_address
@@ -106,6 +111,24 @@ class InstrumentedFrame:
         self.clear_calls_instrumentation()
         return True
 
+def continue_and_wait_for_breakpoint(process, thread, listening_thread, wait_event, notify_event, result):
+    print >>result, process.GetState()
+    process.Continue()
+    wait_event.set()
+    print >>result, 'Process continued, waiting for notification'
+    notify_event.wait()
+    notify_event.clear()
+    print >>result, 'Got notification, sanity checks follow'
+    print >>result, process.GetState()
+    # Some sanity checking
+    if listening_thread.isExiting():
+        print >>result, 'Listener thread exited unexpectedly'
+        return False
+    if thread.GetStopReason() != lldb.eStopReasonBreakpoint:
+        print >>result, thread
+        print >>result, "Thread under trace didn't stop due to a breakpoint"
+        return False
+    return True
 
 def trace(debugger, command, result, internal_dict):
     wait_event = threading.Event()
@@ -124,7 +147,7 @@ def trace(debugger, command, result, internal_dict):
     if not rc:
         print >>self.result, 'Failed to add listener'
 
-    my_thread = MyListeningThread(wait_event, notify_event, listener, result)
+    my_thread = MyListeningThread(wait_event, notify_event, listener, process, result)
     my_thread.start()
     thread = process.GetSelectedThread()
     print >>result, thread
@@ -133,28 +156,13 @@ def trace(debugger, command, result, internal_dict):
     instrumented_frame = InstrumentedFrame(target, thread, frame, result)
     instrumented_frame.instrument_calls()
 
-    print >>result, 'Instrumented all calls, running process'
-    print >>result, process.GetState()
-    process.Continue()
-    wait_event.set()
-    print >>result, 'Process continued, waiting for notification'
-    notify_event.wait()
-    notify_event.clear()
-    while process.GetState() != lldb.eStateStopped:
-        wait_event.set()
-        notify_event.wait()
-        notify_event.clear()
-    print >>result, 'Got notification, sanity checks follow'
-    print >>result, process.GetState()
-    # Some sanity checking
-    if my_thread.isExiting():
-        print >>result, 'Listener thread exited unexpectedly'
+    print >>result, 'Instrumented all calls, running the process'
+    success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
+    if not success:
+        print >>result, "Failed to continue+stop the process"
         return
-    if thread.GetStopReason() != lldb.eStopReasonBreakpoint:
-        print >>result, thread
-        print >>result, "Thread under trace didn't stop due to a breakpoint"
-        return
-    success = instrumented_frame.instrument_call_return()
+
+    success = instrumented_frame.is_stopped_on_call_and_instrument_return()
     if not success:
         print >>result, "Failed to intrument call"
         return
@@ -167,29 +175,15 @@ def trace(debugger, command, result, internal_dict):
     second_instrumented_frame = InstrumentedFrame(target, thread, frame, result)
     second_instrumented_frame.instrument_calls()
 
-
-    print >>result, 'Instrumented all calls, running process'
-    print >>result, process.GetState()
-    process.Continue()
-    wait_event.set()
-    print >>result, 'Process continued, waiting for notification'
-    notify_event.wait()
-    notify_event.clear()
-    while process.GetState() != lldb.eStateStopped:
-        wait_event.set()
-        notify_event.wait()
-        notify_event.clear()
-    print >>result, 'Got notification, sanity checks follow'
-    print >>result, process.GetState()
-    # Some sanity checking
-    if my_thread.isExiting():
-        print >>result, 'Listener thread exited unexpectedly'
-        return
-    if thread.GetStopReason() != lldb.eStopReasonBreakpoint:
-        print >>result, thread
-        print >>result, "Thread under trace didn't stop due to a breakpoint"
+    success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
+    if not success:
+        print >>result, "Failed to continue+stop the process"
         return
 
+    success = second_instrumented_frame.is_stopped_on_call_and_instrument_return()
+    if not success:
+        print >>result, "Failed to intrument call"
+        return
 
     my_thread.exit()
     wait_event.set()
