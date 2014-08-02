@@ -100,6 +100,11 @@ class InstrumentedFrame:
         self.target.BreakpointDelete(self.return_breakpoint.GetID())
         self.return_breakpoint == None
 
+    def instrument_return(self, return_address):
+        self.return_address = return_address
+        self.return_breakpoint = self.target.BreakpointCreateByAddress(self.return_address)
+        self.return_breakpoint.SetThreadID(self.thread.GetThreadID())
+
     def is_stopped_on_call_and_instrument_return(self, frame):
         if frame.GetFrameID() != self.frame.GetFrameID():
             print >>self.result, "Frames don't match"
@@ -116,9 +121,7 @@ class InstrumentedFrame:
         if not stop_address in self.subsequent_instruction:
             print >>self.result, "Couldn't find subsequent instruction"
             return False
-        self.return_address = self.subsequent_instruction[stop_address]
-        self.return_breakpoint = self.target.BreakpointCreateByAddress(self.return_address)
-        self.return_breakpoint.SetThreadID(self.thread.GetThreadID())
+        self.instrument_return(self.subsequent_instruction[stop_address])
         self.clear_calls_instrumentation()
         return True
 
@@ -177,19 +180,24 @@ def trace(debugger, command, result, internal_dict):
     my_thread.start()
     thread = process.GetSelectedThread()
     print >>result, thread
-    frame = thread.GetSelectedFrame()
 
     instrumented_frames = []
+    frame = thread.GetSelectedFrame()
+    # Instrument parent frame's return, so that we can detect when to terminate tracing
+    parent_frame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
+    if parent_frame != None:
+        instrumented_frame = InstrumentedFrame(target, thread, parent_frame, result)
+        instrumented_frame.instrument_return(parent_frame.GetPC())
+        instrumented_frames.append(instrumented_frame)
+
     instrumented_frame = None
     while True:
         if instrumented_frame == None:
             instrumented_frame = InstrumentedFrame(target, thread, frame, result)
-            instrumented_frames.append(instrumented_frame)
 
         instrumented_frame.instrument_calls()
         print >>result, 'Instrumented all calls, running the process'
 
-        result.flush();
         success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
         if not success:
             print >>result, "Failed to continue+stop the process"
@@ -202,24 +210,26 @@ def trace(debugger, command, result, internal_dict):
         success = instrumented_frame.is_stopped_on_call_and_instrument_return(frame)
         if not success:
             print >>result, "Failed to instrument call. Trying popping instrumented frames."
+            # Clear current frame of all (call) breakpoints
+            instrumented_frame.clear()
             while len(instrumented_frames) > 0:
                 instrumented_frame = instrumented_frames.pop()
                 print >>result, "Checking whether to pop a frame"
                 if instrumented_frame.is_stopped_on_return(frame):
                     print >>result, "Found return frame"
                     instrumented_frame.clear_return_breakpoint()
-                    instrumented_frames.append(instrumented_frame)
                     success = True
                     break
-                print >>result, "Popping frame"
+                print >>result, "Clearing popped frame"
                 instrumented_frame.clear()
-            if success:
+            if success and len(instrumented_frames) > 0:
                 continue
             else:
                 print >>result, "Run out of frames to pop, exiting"
                 break
 
         thread.StepInstruction(False)
+        instrumented_frames.append(instrumented_frame)
         instrumented_frame = None
         frame = thread.GetFrameAtIndex(0)
         stop_address = frame.GetPC()
