@@ -60,12 +60,13 @@ class InstrumentedFrame:
         self.return_breakpoint = None
         self.call_breakpoints = {}
         self.jmp_breakpoints = {}
+        self.syscall_breakpoints = {}
         self.subsequent_instruction = {}
 
     def update_frame(self, frame):
         self.frame = frame
 
-    def instrument_calls_and_jmps(self):
+    def instrument_calls_syscalls_and_jmps(self):
         # TODO: symbols vs functions
         print >>self.result, self.frame.GetFunction()
         symbol = self.frame.GetSymbol()
@@ -106,6 +107,10 @@ class InstrumentedFrame:
                     breakpoint = self.target.BreakpointCreateByAddress(address)
                     breakpoint.SetThreadID(self.thread.GetThreadID())
                     self.jmp_breakpoints[address] = breakpoint
+            if mnemonic != None and mnemonic.startswith('syscall'):
+                breakpoint = self.target.BreakpointCreateByAddress(address)
+                breakpoint.SetThreadID(self.thread.GetThreadID())
+                self.syscall_breakpoints[address] = breakpoint
 
     def clear_calls_instrumentation(self):
         for breakpoint in self.call_breakpoints.itervalues():
@@ -113,6 +118,12 @@ class InstrumentedFrame:
             self.target.BreakpointDelete(breakpoint.GetID())
         self.call_breakpoints = {}
         self.subsequent_instruction = {}
+
+    def clear_syscall_instrumentation(self):
+        for breakpoint in self.syscall_breakpoints.itervalues():
+            #print >>self.result, 'Deleting breakpoint %d' % breakpoint.GetID()
+            self.target.BreakpointDelete(breakpoint.GetID())
+        self.syscall_breakpoints = {}
 
     def clear_jmps_instrumentation(self):
         for breakpoint in self.jmp_breakpoints.itervalues():
@@ -131,6 +142,14 @@ class InstrumentedFrame:
 
         stop_address = frame.GetPC()
         return stop_address in self.call_breakpoints
+
+    def is_stopped_on_syscall(self, frame):
+        if frame.GetFrameID() != self.frame.GetFrameID():
+            print >>self.result, "D Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID())
+            return False
+
+        stop_address = frame.GetPC()
+        return stop_address in self.syscall_breakpoints
 
     def is_stopped_on_jmp(self, frame, validate_saved_frame):
         if validate_saved_frame and frame.GetFrameID() != self.frame.GetFrameID():
@@ -156,19 +175,22 @@ class InstrumentedFrame:
         self.return_breakpoint = self.target.BreakpointCreateByAddress(self.return_address)
         self.return_breakpoint.SetThreadID(self.thread.GetThreadID())
 
-    def clear_calls_and_jmps_and_instrument_return(self, frame):
+    def clear_calls_syscalls_and_jmps_and_instrument_return(self, frame):
         stop_address = frame.GetPC()
         if not stop_address in self.subsequent_instruction:
             print >>self.result, "Couldn't find subsequent instruction"
             return False
         self.instrument_return(self.subsequent_instruction[stop_address])
         self.clear_calls_instrumentation()
+        self.clear_syscall_instrumentation()
         self.clear_jmps_instrumentation()
         return True
 
     def clear(self):
         if self.call_breakpoints != None:
             self.clear_calls_instrumentation()
+        if self.syscall_breakpoints != None:
+            self.clear_syscall_instrumentation()
         if self.jmp_breakpoints != None:
             self.clear_jmps_instrumentation()
         if self.return_breakpoint != None:
@@ -251,11 +273,11 @@ def trace(debugger, command, result, internal_dict):
     while True:
         if instrumented_frame == None:
             instrumented_frame = InstrumentedFrame(target, thread, frame, result)
-            instrumented_frame.instrument_calls_and_jmps()
+            instrumented_frame.instrument_calls_syscalls_and_jmps()
 
         print >>result, 'Running the process'
         # Continue running until next breakpoint is hit, _unless_ PC is already on a breakpoint address
-        if not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True):
+        if not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True):
             success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
             if not success:
                 print >>result, "Failed to continue+stop the process"
@@ -303,10 +325,10 @@ def trace(debugger, command, result, internal_dict):
             if len(instrumented_frames) == 0:
                 print >>result, "Detected return from the function under trace, exiting"
                 break
-            instrumented_frame.instrument_calls_and_jmps()
+            instrumented_frame.instrument_calls_syscalls_and_jmps()
         elif instrumented_frame.is_stopped_on_call(frame):
             print >>result, "Stopped on call"
-            success = instrumented_frame.clear_calls_and_jmps_and_instrument_return(frame)
+            success = instrumented_frame.clear_calls_syscalls_and_jmps_and_instrument_return(frame)
             if not success:
                 break
             caller = frame.GetSymbol().GetName()
@@ -318,6 +340,16 @@ def trace(debugger, command, result, internal_dict):
             instrumented_frame = None
             frame = thread.GetFrameAtIndex(0)
             print >>result, 'Entered new frame at: 0x%lx' % frame.GetPC()
+        elif instrumented_frame.is_stopped_on_syscall(frame):
+            rax = -1L;
+            register_sets = frame.GetRegisters()
+            for register_set in register_sets:
+                if register_set.GetName() == "General Purpose Registers":
+                    for register in register_set:
+                        if register.GetName() == "rax":
+                            rax = register.GetValue()
+            print >>result, 'T: Syscall {}'.format(rax)
+            thread.StepInstruction(False)
         elif instrumented_frame.is_stopped_on_jmp(frame, False):
             print >>result, "Stopped on jmp"
             caller = frame.GetSymbol().GetName()
@@ -326,9 +358,9 @@ def trace(debugger, command, result, internal_dict):
             frame = thread.GetFrameAtIndex(0)
             destination = frame.GetSymbol().GetName()
             destination_offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
-            print >>result, "T: {caller} + {caller_offset:#x} === {destination} + {destination_offset:#16x}".format(caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
+            print >>result, "T: {caller} + {caller_offset:#x} === {destination} + {destination_offset:#x}".format(caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
             instrumented_frame.update_frame(frame)
-            instrumented_frame.instrument_calls_and_jmps()
+            instrumented_frame.instrument_calls_syscalls_and_jmps()
         else:
             print >>result, "Failed to detect return, call or jmp. Error exit"
             break
