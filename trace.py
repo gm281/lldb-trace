@@ -294,6 +294,9 @@ def trace(debugger, command, result, internal_dict):
         # to verify the address.
         if parent_instrumented_frame != None and parent_instrumented_frame.is_stopped_on_return(frame):
             print >>result, "Stopped on return, popping a frame"
+            destination = frame.GetSymbol().GetName()
+            offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
+            print >>result, "T: {destination} + {offset:#x} <==".format(destination=destination, offset=offset)
             instrumented_frame.clear()
             instrumented_frame = instrumented_frames.pop()
             instrumented_frame.clear_return_breakpoint()
@@ -306,15 +309,24 @@ def trace(debugger, command, result, internal_dict):
             success = instrumented_frame.clear_calls_and_jmps_and_instrument_return(frame)
             if not success:
                 break
+            caller = frame.GetSymbol().GetName()
+            offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
             thread.StepInstruction(False)
+            destination = thread.GetFrameAtIndex(0).GetSymbol().GetName()
+            print >>result, "T: {caller} + {offset:#x} ==> {destination}".format(caller=caller, offset=offset, destination=destination)
             instrumented_frames.append(instrumented_frame)
             instrumented_frame = None
             frame = thread.GetFrameAtIndex(0)
             print >>result, 'Entered new frame at: 0x%lx' % frame.GetPC()
         elif instrumented_frame.is_stopped_on_jmp(frame, False):
             print >>result, "Stopped on jmp"
+            caller = frame.GetSymbol().GetName()
+            caller_offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
             thread.StepInstruction(False)
             frame = thread.GetFrameAtIndex(0)
+            destination = frame.GetSymbol().GetName()
+            destination_offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
+            print >>result, "T: {caller} + {caller_offset:#x} === {destination} + {destination_offset:#16x}".format(caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
             instrumented_frame.update_frame(frame)
             instrumented_frame.instrument_calls_and_jmps()
         else:
