@@ -66,6 +66,9 @@ class InstrumentedFrame:
     def update_frame(self, frame):
         self.frame = frame
 
+    def is_frame_valid(self):
+        return self.frame.IsValid()
+
     def instrument_calls_syscalls_and_jmps(self):
         # TODO: symbols vs functions
         print >>self.result, self.frame.GetFunction()
@@ -136,7 +139,7 @@ class InstrumentedFrame:
         self.return_breakpoint == None
 
     def is_stopped_on_call(self, frame):
-        if frame.GetFrameID() != self.frame.GetFrameID():
+        if not self.frame.IsValid() or frame.GetFrameID() != self.frame.GetFrameID():
             print >>self.result, "A Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID())
             return False
 
@@ -144,7 +147,7 @@ class InstrumentedFrame:
         return stop_address in self.call_breakpoints
 
     def is_stopped_on_syscall(self, frame):
-        if frame.GetFrameID() != self.frame.GetFrameID():
+        if not self.frame.IsValid() or frame.GetFrameID() != self.frame.GetFrameID():
             print >>self.result, "D Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID())
             return False
 
@@ -152,7 +155,7 @@ class InstrumentedFrame:
         return stop_address in self.syscall_breakpoints
 
     def is_stopped_on_jmp(self, frame, validate_saved_frame):
-        if validate_saved_frame and frame.GetFrameID() != self.frame.GetFrameID():
+        if validate_saved_frame and (not self.frame.IsValid() or frame.GetFrameID() != self.frame.GetFrameID()):
             print >>self.result, "B Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID())
             return False
 
@@ -160,7 +163,7 @@ class InstrumentedFrame:
         return stop_address in self.jmp_breakpoints
 
     def is_stopped_on_return(self, frame):
-        if frame.GetFrameID() != self.frame.GetFrameID():
+        if not self.frame.IsValid() or frame.GetFrameID() != self.frame.GetFrameID():
             print >>self.result, "C Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID())
             return False
 
@@ -362,8 +365,13 @@ def trace(debugger, command, result, internal_dict):
             instrumented_frame.update_frame(frame)
             instrumented_frame.instrument_calls_syscalls_and_jmps()
         else:
-            print >>result, "Failed to detect return, call or jmp. Error exit"
-            break
+            top_instrumented_frame = instrumented_frame
+            if top_instrumented_frame == None:
+                top_instrumented_frame = parent_instrumented_frame
+            if top_instrumented_frame == None or not top_instrumented_frame.is_frame_valid():
+                print >>result, "Failed to detect return, call or jmp. Error exit"
+                break
+            print >>result, "Unexpected breakpoint but top frame still valid, continuing"
 
     # TODO: clear instrumented frames, on errors there
     # may be breakpoints left, what needs to be worked out

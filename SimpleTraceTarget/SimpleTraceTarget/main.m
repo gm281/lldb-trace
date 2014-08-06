@@ -19,9 +19,23 @@ void a(void)
     printf("Cycle\n");
 }
 
+void c(int i);
+void d(int i)
+{
+    c(i-1);
+}
+
+void c(int i)
+{
+    if (i > 0) {
+        d(i);
+    }
+}
+
 void breakpoint(void)
 {
     a();
+    c(1);
 }
 
 int main(int argc, const char * argv[])
