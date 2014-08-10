@@ -265,6 +265,7 @@ def trace(debugger, command, result, internal_dict):
 
     instrumented_frames = []
     frame = thread.GetSelectedFrame()
+    module = frame.GetModule()
     # Instrument parent frame's return, so that we can detect when to terminate tracing
     parent_frame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
     if parent_frame != None:
@@ -272,15 +273,20 @@ def trace(debugger, command, result, internal_dict):
         instrumented_frame.instrument_return(parent_frame.GetPC())
         instrumented_frames.append(instrumented_frame)
 
+    depth = 0
+    spacer = '    '
     instrumented_frame = None
     while True:
         if instrumented_frame == None:
-            instrumented_frame = InstrumentedFrame(target, thread, frame, result)
-            instrumented_frame.instrument_calls_syscalls_and_jmps()
+            if frame.GetModule() == module:
+                instrumented_frame = InstrumentedFrame(target, thread, frame, result)
+                instrumented_frame.instrument_calls_syscalls_and_jmps()
+            else:
+                print >>result, "T: symbol: {} in different module".format(frame.GetSymbol().GetName())
 
         print >>result, 'Running the process'
         # Continue running until next breakpoint is hit, _unless_ PC is already on a breakpoint address
-        if not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True):
+        if instrumented_frame == None or (not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True)):
             success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event, result)
             if not success:
                 print >>result, "Failed to continue+stop the process"
@@ -291,7 +297,7 @@ def trace(debugger, command, result, internal_dict):
         print >>result, frame
         print >>result, frame.GetSymbol()
         print >>result, "0x%lx" % frame.GetPC()
-        print_stacktrace(result, target, thread)
+        #print_stacktrace(result, target, thread)
         print >>result, "===="
 
         if len(instrumented_frames) > 0:
@@ -319,16 +325,24 @@ def trace(debugger, command, result, internal_dict):
         # to verify the address.
         if parent_instrumented_frame != None and parent_instrumented_frame.is_stopped_on_return(frame):
             print >>result, "Stopped on return, popping a frame"
+            depth = depth - 1
             destination = frame.GetSymbol().GetName()
             offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
-            print >>result, "T: {destination} + {offset:#x} <==".format(destination=destination, offset=offset)
-            instrumented_frame.clear()
+            print >>result, "T:{} {destination} + {offset:#x} <==".format(spacer * depth, destination=destination, offset=offset)
+            if instrumented_frame != None:
+                instrumented_frame.clear()
             instrumented_frame = instrumented_frames.pop()
             instrumented_frame.clear_return_breakpoint()
             if len(instrumented_frames) == 0:
                 print >>result, "Detected return from the function under trace, exiting"
                 break
             instrumented_frame.instrument_calls_syscalls_and_jmps()
+        elif instrumented_frame == None:
+            if parent_instrumented_frame != None and parent_instrumented_frame.is_frame_valid():
+                print >>result, "Unexpected breakpoint but parent frame still valid, continuing"
+                continue
+            print >>result, "Breakpoint expected on return address, but not there, exiting"
+            break
         elif instrumented_frame.is_stopped_on_call(frame):
             print >>result, "Stopped on call"
             success = instrumented_frame.clear_calls_syscalls_and_jmps_and_instrument_return(frame)
@@ -338,10 +352,11 @@ def trace(debugger, command, result, internal_dict):
             offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
             thread.StepInstruction(False)
             destination = thread.GetFrameAtIndex(0).GetSymbol().GetName()
-            print >>result, "T: {caller} + {offset:#x} ==> {destination}".format(caller=caller, offset=offset, destination=destination)
+            print >>result, "T:{} {caller} + {offset:#x} ==> {destination}".format(spacer * depth, caller=caller, offset=offset, destination=destination)
             instrumented_frames.append(instrumented_frame)
             instrumented_frame = None
             frame = thread.GetFrameAtIndex(0)
+            depth = depth + 1
             print >>result, 'Entered new frame at: 0x%lx' % frame.GetPC()
         elif instrumented_frame.is_stopped_on_syscall(frame):
             rax = -1L;
@@ -351,7 +366,7 @@ def trace(debugger, command, result, internal_dict):
                     for register in register_set:
                         if register.GetName() == "rax":
                             rax = register.GetValue()
-            print >>result, 'T: Syscall {}'.format(rax)
+            print >>result, 'T:{} Syscall {}'.format(spacer * depth, rax)
             thread.StepInstruction(False)
         elif instrumented_frame.is_stopped_on_jmp(frame, False):
             print >>result, "Stopped on jmp"
@@ -361,17 +376,16 @@ def trace(debugger, command, result, internal_dict):
             frame = thread.GetFrameAtIndex(0)
             destination = frame.GetSymbol().GetName()
             destination_offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
-            print >>result, "T: {caller} + {caller_offset:#x} === {destination} + {destination_offset:#x}".format(caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
+            print >>result, "T:{} {caller} + {caller_offset:#x} === {destination} + {destination_offset:#x}".format(spacer * depth, caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
             instrumented_frame.update_frame(frame)
-            instrumented_frame.instrument_calls_syscalls_and_jmps()
+            if frame.GetModule() == module:
+                instrumented_frame.instrument_calls_syscalls_and_jmps()
+        elif instrumented_frame.is_frame_valid():
+            print >>result, "Unexpected breakpoint but instrumented frame still valid, continuing"
+            continue
         else:
-            top_instrumented_frame = instrumented_frame
-            if top_instrumented_frame == None:
-                top_instrumented_frame = parent_instrumented_frame
-            if top_instrumented_frame == None or not top_instrumented_frame.is_frame_valid():
-                print >>result, "Failed to detect return, call or jmp. Error exit"
-                break
-            print >>result, "Unexpected breakpoint but top frame still valid, continuing"
+            print >>result, "Failed to detect return, call or jmp. Error exit"
+            break
 
     # TODO: clear instrumented frames, on errors there
     # may be breakpoints left, what needs to be worked out
