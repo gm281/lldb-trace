@@ -199,6 +199,33 @@ class InstrumentedFrame:
         if self.return_breakpoint != None:
             self.clear_return_breakpoint()
 
+class TraceOptionParser(optparse.OptionParser):
+    def __init__(self, result):
+        optparse.OptionParser.__init__(self)
+        self.result = result
+        self.exited = False
+
+    def get_prog_name(self):
+        return "trace"
+
+    def exit(self, status=0, msg=None):
+        print >>self.result, msg
+        self.exited = True
+
+options = None
+
+def parse_options(command, result):
+    global options
+    command_tokens = shlex.split(command)
+    parser = TraceOptionParser(result)
+    parser.add_option("-v", "--verbose", action="store_true", dest="verbose", default=False, help="Produce verbose output, useful for debugging")
+    parser.add_option("-f", "--file", dest="filename", metavar="FILE", help="Redirect output to the specified file")
+    parser.add_option("-m", "--module-only", action="store_true", dest="module_only", default=False, help="Trace only in the module where root symbol was defined")
+    parser.add_option("-s", "--trace-symbol", action="append", dest="symbol_whitelist", metavar="SYMBOL_SUBSTRING", help="Trace symbol even if wouldn't be otherwised traced due to other limitations")
+    (options, _) = parser.parse_args(command_tokens)
+    print >>result, "OPTIONS:"
+    print >>result, options
+    return parser.exited
 
 def continue_and_wait_for_breakpoint(process, thread, listening_thread, wait_event, notify_event, result):
     print >>result, process.GetState()
@@ -242,6 +269,14 @@ def print_stacktrace(result, target, thread):
             print >>result, '  frame #{num}: {addr:#016x} `{func}'.format(num=i, addr=load_addr, func=frame.GetFunctionName())
 
 def trace(debugger, command, result, internal_dict):
+    """
+    Traces execution of the symbol in the currently selected frame.
+        trace -h/--help, for full help
+    """
+    print >>result, command
+    if parse_options(command, result):
+        return
+
     wait_event = threading.Event()
     wait_event.clear()
     notify_event = threading.Event()
@@ -278,7 +313,7 @@ def trace(debugger, command, result, internal_dict):
     instrumented_frame = None
     while True:
         if instrumented_frame == None:
-            if frame.GetModule() == module:
+            if not options.module_only or frame.GetModule() == module:
                 instrumented_frame = InstrumentedFrame(target, thread, frame, result)
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
             else:
@@ -378,8 +413,10 @@ def trace(debugger, command, result, internal_dict):
             destination_offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
             print >>result, "T:{} {caller} + {caller_offset:#x} === {destination} + {destination_offset:#x}".format(spacer * depth, caller=caller, caller_offset=caller_offset, destination=destination, destination_offset=destination_offset)
             instrumented_frame.update_frame(frame)
-            if frame.GetModule() == module:
+            if not options.module_only or frame.GetModule() == module:
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
+            else:
+                print >>result, "Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module)
         elif instrumented_frame.is_frame_valid():
             print >>result, "Unexpected breakpoint but instrumented frame still valid, continuing"
             continue
