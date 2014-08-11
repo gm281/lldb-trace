@@ -276,11 +276,11 @@ def print_stacktrace(target, thread):
             log_v('  frame #{num}: {addr:#016x} `{func}'.format(num=i, addr=load_addr, func=frame.GetFunctionName()))
 
 def trace(debugger, command, result, internal_dict):
-    global options
     """
     Traces execution of the symbol in the currently selected frame.
         trace -h/--help, for full help
     """
+    global options
     if parse_options(command, result):
         return
 
@@ -423,7 +423,7 @@ def trace(debugger, command, result, internal_dict):
             if not options.module_only or frame.GetModule() == module:
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
             else:
-                log_v("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
+                log("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
         elif instrumented_frame.is_frame_valid():
             log_v("Unexpected breakpoint but instrumented frame still valid, continuing")
             continue
