@@ -44,7 +44,7 @@ a + 0x1c ==> b
  ```
  where `==>` denotes call to a function, `===` jmp to a different symbol, `<==` is a return, `Syscall ID` is where a syscall of a given `ID` is executed.
  
- ### Help
+### Help
  `(lldb) trace -h` gives a list of options `trace` accepts, currently:
  ```
 Options:
@@ -56,7 +56,7 @@ Options:
   -m, --module-only     Trace only in the module where root symbol was defined
   ```
  
- ### More advanced usage
+### More advanced usage
  * `trace` can trace any symbol in the current execution backtrace. Select the desired frame with `(lldb) frame select FRAME_ID` before executing `trace`
  * Long-running `trace` doesn't produce any output by default, until the command execution is finished (seems to be by design). `trace` makes it possible to produce incremental output by either outputing to a specified file `(lldb) trace -f FILE` or by outputting directly to stdout (this may not always work properly since it's against the LLDB's policy) `(lldb) trace -s`
  * If you're not interested in calling external symbols (external to the binary module in which the root symbol is defined) use `(lldb) trace -m`. Every time extrenal symbol is detected appropriate message (such as `Not instrumenting since module X isn't the same as Y`) will be printed.
