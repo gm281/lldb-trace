@@ -53,14 +53,18 @@ class MyListeningThread(threading.Thread):
                 return
             while True:
                 event = lldb.SBEvent()
+                log_v('Listener waiting for events')
                 wait_result = self.listener.WaitForEvent(10, event)
+                log_v('Listener wait exited: {}, {}'.format(str(wait_result), str(event)))
 
                 if not wait_result:
                     log_v('Listener thread timed out waiting for notification')
                     self.wait_timeout = True
                     self.notify_event.set()
                     break
-                if self.process.GetState() == lldb.eStateStopped:
+                processState = self.process.GetState()
+                if processState == lldb.eStateStopped:
+                    log_v('Listener detected process state change, but it is not stopped: {}'.format(str(processState)))
                     break
                 log_v('Process not stopped, listening for the next event')
             log_v('Listener thread got event, notifying')
@@ -87,6 +91,10 @@ class InstrumentedFrame:
         # TODO: symbols vs functions
         symbol = self.frame.GetSymbol()
         log_v("Instrumenting symbol: {}".format(str(symbol)))
+        log_v("gm281 symbol name: {}".format(str(symbol.GetName())))
+        if symbol.GetName() == "_class_initialize":
+            log_v("Not instrumenting _class_initialize")
+            return
         start_address = symbol.GetStartAddress().GetLoadAddress(self.target)
         end_address = symbol.GetEndAddress().GetLoadAddress(self.target)
         instruction_list = symbol.GetInstructions(self.target)
@@ -102,7 +110,7 @@ class InstrumentedFrame:
                 previous_breakpoint_address = 0L
             mnemonic = i.GetMnemonic(self.target)
             if mnemonic != None and mnemonic.startswith('call'):
-                log_v('Putting breakpoint at 0x%lx' % address)
+                log_v('Putting call breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
                 self.call_breakpoints[address] = breakpoint
@@ -114,10 +122,12 @@ class InstrumentedFrame:
                     jmp_destination = 0L;
 
                 if jmp_destination < start_address or jmp_destination >= end_address:
+                    log_v('Putting jmp breakpoint at 0x%lx' % address)
                     breakpoint = self.target.BreakpointCreateByAddress(address)
                     breakpoint.SetThreadID(self.thread.GetThreadID())
                     self.jmp_breakpoints[address] = breakpoint
             if mnemonic != None and mnemonic.startswith('syscall'):
+                log_v('Putting syscall breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
                 self.syscall_breakpoints[address] = breakpoint
@@ -178,6 +188,7 @@ class InstrumentedFrame:
         return self.return_address == stop_address
 
     def instrument_return(self, return_address):
+        log_v('Putting return breakpoint at 0x%lx' % return_address)
         self.return_address = return_address
         self.return_breakpoint = self.target.BreakpointCreateByAddress(self.return_address)
         self.return_breakpoint.SetThreadID(self.thread.GetThreadID())
@@ -237,9 +248,9 @@ def parse_options(command, result):
     return parser.exited
 
 def continue_and_wait_for_breakpoint(process, thread, listening_thread, wait_event, notify_event):
+    wait_event.set()
     log_v("Process in state: {}".format(str(process.GetState())))
     process.Continue()
-    wait_event.set()
     log_v('Process continued, waiting for notification')
     notify_event.wait()
     notify_event.clear()
@@ -292,18 +303,18 @@ def trace(debugger, command, result, internal_dict):
     notify_event.clear()
 
     target = debugger.GetSelectedTarget()
+    broadcaster = target.GetBroadcaster()
     log_v("Target: {}".format(str(target)))
     process = target.GetProcess()
     log_v("Process: {}".format(str(process)))
-    broadcaster = process.GetBroadcaster()
     log_v("Broadcaster: {}".format(str(broadcaster)))
     listener = lldb.SBListener("trace breakpoint listener")
     rc = broadcaster.AddListener(listener, lldb.SBProcess.eBroadcastBitStateChanged)
     if not rc:
         log('Failed to add listener')
-
     my_thread = MyListeningThread(wait_event, notify_event, listener, process)
     my_thread.start()
+
     thread = process.GetSelectedThread()
     log_v("Thread: {}".format(str(thread)))
 
@@ -328,13 +339,16 @@ def trace(debugger, command, result, internal_dict):
             else:
                 log("symbol: {} in different module".format(frame.GetSymbol().GetName()))
 
-        log_v('Running the process')
         # Continue running until next breakpoint is hit, _unless_ PC is already on a breakpoint address
         if instrumented_frame == None or (not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True)):
+            log_v('Running the process')
             success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event)
+            success = True
             if not success:
                 log_v("Failed to continue+stop the process")
                 break
+        else:
+            log_v('Process already at a breakpoint address')
 
         frame = thread.GetFrameAtIndex(0)
         log_v("=================== Stopped at: ====================")
@@ -374,6 +388,7 @@ def trace(debugger, command, result, internal_dict):
             if instrumented_frame != None:
                 instrumented_frame.clear()
             instrumented_frame = instrumented_frames.pop()
+            log_v("popped frame id: {}, {}, ({})".format(instrumented_frame.frame.GetFrameID(), instrumented_frame.frame.IsValid(), destination))
             instrumented_frame.clear_return_breakpoint()
             if len(instrumented_frames) == 0:
                 log_v("Detected return from the function under trace, exiting")
