@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import lldb
-import commands
 import optparse
 import shlex
 import threading
