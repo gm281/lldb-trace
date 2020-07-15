@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 import lldb
 import commands
@@ -98,16 +98,16 @@ class InstrumentedFrame:
         start_address = symbol.GetStartAddress().GetLoadAddress(self.target)
         end_address = symbol.GetEndAddress().GetLoadAddress(self.target)
         instruction_list = symbol.GetInstructions(self.target)
-        previous_breakpoint_address = 0L
+        previous_breakpoint_address = 0
         for i in instruction_list:
             address = i.GetAddress().GetLoadAddress(self.target)
             #print >>self.result, '0x%x' % address
             #print >>self.result, '{}, {}, {}'.format(i.GetMnemonic(self.target), i.GetOperands(self.target), i.GetComment(self.target))
             if address in self.call_breakpoints or address in self.jmp_breakpoints:
                 continue
-            if previous_breakpoint_address != 0L:
+            if previous_breakpoint_address != 0:
                 self.subsequent_instruction[previous_breakpoint_address] = address
-                previous_breakpoint_address = 0L
+                previous_breakpoint_address = 0
             mnemonic = i.GetMnemonic(self.target)
             if mnemonic != None and mnemonic.startswith('call'):
                 log_v('Putting call breakpoint at 0x%lx' % address)
@@ -119,7 +119,7 @@ class InstrumentedFrame:
                 try:
                     jmp_destination = int(i.GetOperands(self.target), 16)
                 except:
-                    jmp_destination = 0L;
+                    jmp_destination = 0;
 
                 if jmp_destination < start_address or jmp_destination >= end_address:
                     log_v('Putting jmp breakpoint at 0x%lx' % address)
@@ -133,18 +133,18 @@ class InstrumentedFrame:
                 self.syscall_breakpoints[address] = breakpoint
 
     def clear_calls_instrumentation(self):
-        for breakpoint in self.call_breakpoints.itervalues():
+        for breakpoint in iter(self.call_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.call_breakpoints = {}
         self.subsequent_instruction = {}
 
     def clear_syscall_instrumentation(self):
-        for breakpoint in self.syscall_breakpoints.itervalues():
+        for breakpoint in iter(self.syscall_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.syscall_breakpoints = {}
 
     def clear_jmps_instrumentation(self):
-        for breakpoint in self.jmp_breakpoints.itervalues():
+        for breakpoint in iter(self.jmp_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.jmp_breakpoints = {}
 
@@ -416,7 +416,7 @@ def trace(debugger, command, result, internal_dict):
             depth = depth + 1
             log_v('Entered new frame at: 0x%lx' % frame.GetPC())
         elif instrumented_frame.is_stopped_on_syscall(frame):
-            rax = -1L;
+            rax = -1;
             register_sets = frame.GetRegisters()
             for register_set in register_sets:
                 if register_set.GetName() == "General Purpose Registers":
@@ -460,4 +460,4 @@ def trace(debugger, command, result, internal_dict):
 # And the initialization code to add your commands
 def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand('command script add -f trace.trace trace')
-    print 'The "trace" python command has been installed and is ready for use.'
+    print('The "trace" python command has been installed and is ready for use.')
