@@ -320,6 +320,11 @@ def trace(debugger, command, result, internal_dict):
     instrumented_frames = []
     frame: lldb.SBFrame = thread.GetSelectedFrame()
     module: lldb.SBModule = frame.GetModule()
+    # UINT32_MAX represents an invalid thread. This likely means a non-launched
+    # process
+    if frame.GetFrameID() == 4294967295:
+        print("Invalid frame, has your process started?")
+        return
     # Instrument parent frame's return, so that we can detect when to terminate tracing
     parent_frame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
     if parent_frame != None:
