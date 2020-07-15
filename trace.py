@@ -442,7 +442,7 @@ def trace(debugger: lldb.SBDebugger, command: str, result: lldb.SBCommandReturnO
             if not options.module_only or frame.GetModule() == module:
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
             else:
-                log("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
+                log_v("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
         elif instrumented_frame.is_frame_valid():
             log_v("Unexpected breakpoint but instrumented frame still valid, continuing")
             continue
