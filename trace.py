@@ -1,7 +1,6 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 import lldb
-import commands
 import optparse
 import shlex
 import threading
@@ -98,59 +97,59 @@ class InstrumentedFrame:
         start_address = symbol.GetStartAddress().GetLoadAddress(self.target)
         end_address = symbol.GetEndAddress().GetLoadAddress(self.target)
         instruction_list = symbol.GetInstructions(self.target)
-        previous_breakpoint_address = 0L
+        previous_breakpoint_address = 0
         for i in instruction_list:
             address = i.GetAddress().GetLoadAddress(self.target)
             #print >>self.result, '0x%x' % address
             #print >>self.result, '{}, {}, {}'.format(i.GetMnemonic(self.target), i.GetOperands(self.target), i.GetComment(self.target))
             if address in self.call_breakpoints or address in self.jmp_breakpoints:
                 continue
-            if previous_breakpoint_address != 0L:
+            if previous_breakpoint_address != 0:
                 self.subsequent_instruction[previous_breakpoint_address] = address
-                previous_breakpoint_address = 0L
+                previous_breakpoint_address = 0
             mnemonic = i.GetMnemonic(self.target)
-            if mnemonic != None and mnemonic.startswith('call'):
+            if mnemonic is not None and mnemonic.startswith('call'):
                 log_v('Putting call breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
                 self.call_breakpoints[address] = breakpoint
                 previous_breakpoint_address = address
-            if mnemonic != None and mnemonic.startswith('jmp'):
+            if mnemonic is not None and mnemonic.startswith('jmp'):
                 try:
                     jmp_destination = int(i.GetOperands(self.target), 16)
                 except:
-                    jmp_destination = 0L;
+                    jmp_destination = 0;
 
                 if jmp_destination < start_address or jmp_destination >= end_address:
                     log_v('Putting jmp breakpoint at 0x%lx' % address)
                     breakpoint = self.target.BreakpointCreateByAddress(address)
                     breakpoint.SetThreadID(self.thread.GetThreadID())
                     self.jmp_breakpoints[address] = breakpoint
-            if mnemonic != None and mnemonic.startswith('syscall'):
+            if mnemonic is not None and mnemonic.startswith('syscall'):
                 log_v('Putting syscall breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
                 self.syscall_breakpoints[address] = breakpoint
 
     def clear_calls_instrumentation(self):
-        for breakpoint in self.call_breakpoints.itervalues():
+        for breakpoint in iter(self.call_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.call_breakpoints = {}
         self.subsequent_instruction = {}
 
     def clear_syscall_instrumentation(self):
-        for breakpoint in self.syscall_breakpoints.itervalues():
+        for breakpoint in iter(self.syscall_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.syscall_breakpoints = {}
 
     def clear_jmps_instrumentation(self):
-        for breakpoint in self.jmp_breakpoints.itervalues():
+        for breakpoint in iter(self.jmp_breakpoints.values()):
             self.target.BreakpointDelete(breakpoint.GetID())
         self.jmp_breakpoints = {}
 
     def clear_return_breakpoint(self):
         self.target.BreakpointDelete(self.return_breakpoint.GetID())
-        self.return_breakpoint == None
+        self.return_breakpoint is None
 
     def is_stopped_on_call(self, frame):
         if not self.frame.IsValid() or frame.GetFrameID() != self.frame.GetFrameID():
@@ -181,7 +180,7 @@ class InstrumentedFrame:
             log_v("C Frames don't match, ours: {}, valid: {}, submitted: {}".format(self.frame.GetFrameID(), self.frame.IsValid(), frame.GetFrameID()))
             return False
 
-        if self.return_breakpoint == None:
+        if self.return_breakpoint is None:
             return False
 
         stop_address = frame.GetPC()
@@ -205,13 +204,13 @@ class InstrumentedFrame:
         return True
 
     def clear(self):
-        if self.call_breakpoints != None:
+        if self.call_breakpoints is not None:
             self.clear_calls_instrumentation()
-        if self.syscall_breakpoints != None:
+        if self.syscall_breakpoints is not None:
             self.clear_syscall_instrumentation()
-        if self.jmp_breakpoints != None:
+        if self.jmp_breakpoints is not None:
             self.clear_jmps_instrumentation()
-        if self.return_breakpoint != None:
+        if self.return_breakpoint is not None:
             self.clear_return_breakpoint()
 
 class TraceOptionParser(optparse.OptionParser):
@@ -224,7 +223,7 @@ class TraceOptionParser(optparse.OptionParser):
         return "trace"
 
     def exit(self, status=0, msg=None):
-        if msg != None:
+        if msg is not None:
             print >>self.result, msg
         self.exited = True
 
@@ -239,7 +238,7 @@ def parse_options(command, result):
     parser.add_option("-m", "--module-only", action="store_true", dest="module_only", default=False, help="Trace only in the module where root symbol was defined")
     parser.add_option("--follow-symbol", action="append", dest="symbol_whitelist", metavar="SYMBOL_SUBSTRING", help="Trace symbol even if wouldn't be otherwised traced due to other limitations")
     (options, _) = parser.parse_args(command_tokens)
-    if options.filename != None:
+    if options.filename is not None:
         log_file = open(options.filename, 'w')
     elif options.stdout:
         log_file = sys.stdout
@@ -286,7 +285,7 @@ def print_stacktrace(target, thread):
         else:
             log_v('  frame #{num}: {addr:#016x} `{func}'.format(num=i, addr=load_addr, func=frame.GetFunctionName()))
 
-def trace(debugger, command, result, internal_dict):
+def trace(debugger: lldb.SBDebugger, command: str, result: lldb.SBCommandReturnObject, internal_dict):
     """
     Traces execution of the symbol in the currently selected frame.
         trace -h/--help, for full help
@@ -302,10 +301,10 @@ def trace(debugger, command, result, internal_dict):
     notify_event = threading.Event()
     notify_event.clear()
 
-    target = debugger.GetSelectedTarget()
-    broadcaster = target.GetBroadcaster()
+    target: lldb.SBTarget = debugger.GetSelectedTarget()
+    broadcaster: lldb.SBBroadcaster = target.GetBroadcaster()
     log_v("Target: {}".format(str(target)))
-    process = target.GetProcess()
+    process: lldb.SBProcess = target.GetProcess()
     log_v("Process: {}".format(str(process)))
     log_v("Broadcaster: {}".format(str(broadcaster)))
     listener = lldb.SBListener("trace breakpoint listener")
@@ -315,15 +314,20 @@ def trace(debugger, command, result, internal_dict):
     my_thread = MyListeningThread(wait_event, notify_event, listener, process)
     my_thread.start()
 
-    thread = process.GetSelectedThread()
+    thread: lldb.SBThread = process.GetSelectedThread()
     log_v("Thread: {}".format(str(thread)))
 
     instrumented_frames = []
-    frame = thread.GetSelectedFrame()
-    module = frame.GetModule()
+    frame: lldb.SBFrame = thread.GetSelectedFrame()
+    module: lldb.SBModule = frame.GetModule()
+    # UINT32_MAX represents an invalid thread. This likely means a non-launched
+    # process
+    if frame.GetFrameID() == 4294967295:
+        print("Invalid frame, has your process started?")
+        return
     # Instrument parent frame's return, so that we can detect when to terminate tracing
-    parent_frame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
-    if parent_frame != None:
+    parent_frame: lldb.SBFrame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
+    if parent_frame is not None:
         instrumented_frame = InstrumentedFrame(target, thread, parent_frame)
         instrumented_frame.instrument_return(parent_frame.GetPC())
         instrumented_frames.append(instrumented_frame)
@@ -332,7 +336,7 @@ def trace(debugger, command, result, internal_dict):
     spacer = '    '
     instrumented_frame = None
     while True:
-        if instrumented_frame == None:
+        if instrumented_frame is None:
             if not options.module_only or frame.GetModule() == module:
                 instrumented_frame = InstrumentedFrame(target, thread, frame)
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
@@ -340,7 +344,7 @@ def trace(debugger, command, result, internal_dict):
                 log("symbol: {} in different module".format(frame.GetSymbol().GetName()))
 
         # Continue running until next breakpoint is hit, _unless_ PC is already on a breakpoint address
-        if instrumented_frame == None or (not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True)):
+        if instrumented_frame is None or (not instrumented_frame.is_stopped_on_call(frame) and not instrumented_frame.is_stopped_on_syscall(frame) and not instrumented_frame.is_stopped_on_jmp(frame, True)):
             log_v('Running the process')
             success = continue_and_wait_for_breakpoint(process, thread, my_thread, wait_event, notify_event)
             success = True
@@ -379,13 +383,13 @@ def trace(debugger, command, result, internal_dict):
         # return first and if that's not the case, we know we must be in the
         # same logical frame, therefore when checking for jmps, it's enough
         # to verify the address.
-        if parent_instrumented_frame != None and parent_instrumented_frame.is_stopped_on_return(frame):
+        if parent_instrumented_frame is not None and parent_instrumented_frame.is_stopped_on_return(frame):
             log_v("Stopped on return, popping a frame")
             depth = depth - 1
             destination = frame.GetSymbol().GetName()
             offset = frame.GetPCAddress().GetFileAddress() - frame.GetSymbol().GetStartAddress().GetFileAddress()
             log("{} {destination} + {offset:#x} <==".format(spacer * depth, destination=destination, offset=offset))
-            if instrumented_frame != None:
+            if instrumented_frame is not None:
                 instrumented_frame.clear()
             instrumented_frame = instrumented_frames.pop()
             log_v("popped frame id: {}, {}, ({})".format(instrumented_frame.frame.GetFrameID(), instrumented_frame.frame.IsValid(), destination))
@@ -394,8 +398,8 @@ def trace(debugger, command, result, internal_dict):
                 log_v("Detected return from the function under trace, exiting")
                 break
             instrumented_frame.instrument_calls_syscalls_and_jmps()
-        elif instrumented_frame == None:
-            if parent_instrumented_frame != None and parent_instrumented_frame.is_frame_valid():
+        elif instrumented_frame is None:
+            if parent_instrumented_frame is not None and parent_instrumented_frame.is_frame_valid():
                 log_v("Unexpected breakpoint but parent frame still valid, continuing")
                 continue
             log_v("Breakpoint expected on return address, but not there, exiting")
@@ -416,7 +420,7 @@ def trace(debugger, command, result, internal_dict):
             depth = depth + 1
             log_v('Entered new frame at: 0x%lx' % frame.GetPC())
         elif instrumented_frame.is_stopped_on_syscall(frame):
-            rax = -1L;
+            rax = -1;
             register_sets = frame.GetRegisters()
             for register_set in register_sets:
                 if register_set.GetName() == "General Purpose Registers":
@@ -438,7 +442,7 @@ def trace(debugger, command, result, internal_dict):
             if not options.module_only or frame.GetModule() == module:
                 instrumented_frame.instrument_calls_syscalls_and_jmps()
             else:
-                log("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
+                log_v("Not instrumenting since module {} isn't same as {}".format(frame.GetModule(), module))
         elif instrumented_frame.is_frame_valid():
             log_v("Unexpected breakpoint but instrumented frame still valid, continuing")
             continue
@@ -460,4 +464,4 @@ def trace(debugger, command, result, internal_dict):
 # And the initialization code to add your commands
 def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand('command script add -f trace.trace trace')
-    print 'The "trace" python command has been installed and is ready for use.'
+    print('The "trace" python command has been installed and is ready for use.')
