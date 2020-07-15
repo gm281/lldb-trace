@@ -301,10 +301,10 @@ def trace(debugger, command, result, internal_dict):
     notify_event = threading.Event()
     notify_event.clear()
 
-    target = debugger.GetSelectedTarget()
-    broadcaster = target.GetBroadcaster()
+    target: lldb.SBTarget = debugger.GetSelectedTarget()
+    broadcaster: lldb.SBBroadcaster = target.GetBroadcaster()
     log_v("Target: {}".format(str(target)))
-    process = target.GetProcess()
+    process: lldb.SBProcess = target.GetProcess()
     log_v("Process: {}".format(str(process)))
     log_v("Broadcaster: {}".format(str(broadcaster)))
     listener = lldb.SBListener("trace breakpoint listener")
@@ -314,12 +314,12 @@ def trace(debugger, command, result, internal_dict):
     my_thread = MyListeningThread(wait_event, notify_event, listener, process)
     my_thread.start()
 
-    thread = process.GetSelectedThread()
+    thread: lldb.SBThread = process.GetSelectedThread()
     log_v("Thread: {}".format(str(thread)))
 
     instrumented_frames = []
-    frame = thread.GetSelectedFrame()
-    module = frame.GetModule()
+    frame: lldb.SBFrame = thread.GetSelectedFrame()
+    module: lldb.SBModule = frame.GetModule()
     # Instrument parent frame's return, so that we can detect when to terminate tracing
     parent_frame = thread.GetFrameAtIndex(frame.GetFrameID() + 1)
     if parent_frame != None:
