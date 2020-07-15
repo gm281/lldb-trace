@@ -285,7 +285,7 @@ def print_stacktrace(target, thread):
         else:
             log_v('  frame #{num}: {addr:#016x} `{func}'.format(num=i, addr=load_addr, func=frame.GetFunctionName()))
 
-def trace(debugger, command, result, internal_dict):
+def trace(debugger: lldb.SBDebugger, command: str, result: lldb.SBCommandReturnObject, internal_dict):
     """
     Traces execution of the symbol in the currently selected frame.
         trace -h/--help, for full help
