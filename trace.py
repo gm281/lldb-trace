@@ -79,12 +79,49 @@ class InstrumentedFrame:
         self.jmp_breakpoints = {}
         self.syscall_breakpoints = {}
         self.subsequent_instruction = {}
+        self.arch = self.target.triple.split("-")[0]
 
     def update_frame(self, frame):
         self.frame = frame
 
     def is_frame_valid(self):
         return self.frame.IsValid()
+
+    ptrauth_suffixes = ["", "aa", "aaz", "ab", "abz"]
+
+    @staticmethod
+    def check_ptrauth_instruction(base, mnemonic):
+        for suffix in __class__.ptrauth_suffixes:
+            if mnemonic == base + suffix:
+                return True
+        return False
+
+    def is_call_instruction(self, mnemonic):
+        if self.arch == "arm64":
+            return mnemonic == "bl" or __class__.check_ptrauth_instruction("blr", mnemonic)
+        elif self.arch == "x86_64":
+            return mnemonic.startswith('call')
+        else:
+            print(f"Unhandled arch {arch}")
+            return False
+
+    def is_branch_instruction(self, mnemonic):
+        if self.arch == "arm64":
+            return mnemonic == "b" or __class__.check_ptrauth_instruction("br", mnemonic)
+        elif self.arch == "x86_64":
+            return mnemonic.startswith('jmp')
+        else:
+            print(f"Unhandled arch {arch}")
+            return False
+
+    def is_syscall_instruction(self, mnemonic):
+        if self.arch == "arm64":
+            return mnemonic.startswith('svc')
+        elif self.arch == "x86_64":
+            return mnemonic.startswith('syscall')
+        else:
+            print(f"Unhandled arch {arch}")
+            return False
 
     def instrument_calls_syscalls_and_jmps(self):
         # TODO: symbols vs functions
@@ -108,13 +145,13 @@ class InstrumentedFrame:
                 self.subsequent_instruction[previous_breakpoint_address] = address
                 previous_breakpoint_address = 0
             mnemonic = i.GetMnemonic(self.target)
-            if mnemonic is not None and mnemonic.startswith('call'):
+            if mnemonic is not None and self.is_call_instruction(mnemonic):
                 log_v('Putting call breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
                 self.call_breakpoints[address] = breakpoint
                 previous_breakpoint_address = address
-            if mnemonic is not None and mnemonic.startswith('jmp'):
+            if mnemonic is not None and self.is_branch_instruction(mnemonic):
                 try:
                     jmp_destination = int(i.GetOperands(self.target), 16)
                 except:
@@ -125,7 +162,7 @@ class InstrumentedFrame:
                     breakpoint = self.target.BreakpointCreateByAddress(address)
                     breakpoint.SetThreadID(self.thread.GetThreadID())
                     self.jmp_breakpoints[address] = breakpoint
-            if mnemonic is not None and mnemonic.startswith('syscall'):
+            if mnemonic is not None and self.is_syscall_instruction(mnemonic):
                 log_v('Putting syscall breakpoint at 0x%lx' % address)
                 breakpoint = self.target.BreakpointCreateByAddress(address)
                 breakpoint.SetThreadID(self.thread.GetThreadID())
@@ -422,10 +459,18 @@ def trace(debugger: lldb.SBDebugger, command: str, result: lldb.SBCommandReturnO
         elif instrumented_frame.is_stopped_on_syscall(frame):
             rax = -1;
             register_sets = frame.GetRegisters()
+            arch = target.triple.split("-")[0]
+            if arch == "arm64":
+                syscall_register = "x0"
+            elif arch == "x86_64":
+                syscall_register = "rax"
+            else:
+                print(f"Unhandled arch {arch}")
+                syscall_register = ""
             for register_set in register_sets:
                 if register_set.GetName() == "General Purpose Registers":
                     for register in register_set:
-                        if register.GetName() == "rax":
+                        if register.GetName() == syscall_register:
                             rax = register.GetValue()
             log('{} Syscall {}'.format(spacer * depth, rax))
             thread.StepInstruction(False)
