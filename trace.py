@@ -220,7 +220,7 @@ class TraceOptionParser(optparse.OptionParser):
         self.exited = False
 
     def get_prog_name(self):
-        return "trace"
+        return "function-trace"
 
     def exit(self, status=0, msg=None):
         if msg is not None:
@@ -463,5 +463,5 @@ def trace(debugger: lldb.SBDebugger, command: str, result: lldb.SBCommandReturnO
 
 # And the initialization code to add your commands
 def __lldb_init_module(debugger, internal_dict):
-    debugger.HandleCommand('command script add -f trace.trace trace')
-    print('The "trace" python command has been installed and is ready for use.')
+    debugger.HandleCommand('command script add -f trace.trace function-trace')
+    print('The "function-trace" python command has been installed and is ready for use.')
