@@ -7,7 +7,7 @@ Gives complete trace of a function execution including all sub-calls.
 * Attach to a process, for example to `SimpleTraceTarget` contained in this repository: ```$ lldb -p `pgrep SimpleTrace` ```
 * Import the trace script: ```(lldb) command script import $DIR/trace.py```
 * Stop the process execution at the root function you're interested in tracing, e.g. using breakpoints.
-* Trace: ```(lldb) trace```
+* Trace: ```(lldb) function-trace```
 * Output: 
 ```
 a + 0x1c ==> b
@@ -45,7 +45,7 @@ a + 0x1c ==> b
  where `==>` denotes call to a function, `===` jmp to a different symbol, `<==` is a return, `Syscall ID` is where a syscall of a given `ID` is executed.
  
 ### Help
- `(lldb) trace -h` gives a list of options `trace` accepts, currently:
+ `(lldb) function-trace -h` gives a list of options `function-trace` accepts, currently:
  ```
 Options:
   -h, --help            show this help message and exit
@@ -57,17 +57,17 @@ Options:
   ```
  
 ### More advanced usage
- * `trace` can trace any symbol in the current execution backtrace. Select the desired frame with `(lldb) frame select FRAME_ID` before executing `trace`
- * Long-running `trace` doesn't produce any output by default, until the command execution is finished (seems to be by design). `trace` makes it possible to produce incremental output by either outputing to a specified file `(lldb) trace -f FILE` or by outputting directly to stdout (this may not always work properly since it's against the LLDB's policy) `(lldb) trace -s`
- * If you're not interested in calling external symbols (external to the binary module in which the root symbol is defined) use `(lldb) trace -m`. Every time extrenal symbol is detected appropriate message (such as `Not instrumenting since module X isn't the same as Y`) will be printed.
+ * `function-trace` can trace any symbol in the current execution backtrace. Select the desired frame with `(lldb) frame select FRAME_ID` before executing `function-trace`
+ * Long-running `function-trace` doesn't produce any output by default, until the command execution is finished (seems to be by design). `function-trace` makes it possible to produce incremental output by either outputing to a specified file `(lldb) function-trace -f FILE` or by outputting directly to stdout (this may not always work properly since it's against the LLDB's policy) `(lldb) function-trace -s`
+ * If you're not interested in calling external symbols (external to the binary module in which the root symbol is defined) use `(lldb) function-trace -m`. Every time extrenal symbol is detected appropriate message (such as `Not instrumenting since module X isn't the same as Y`) will be printed.
  
 ### Debugging
-* Verbose output is available with `(lldb) trace -v`
+* Verbose output is available with `(lldb) function-trace -v`
 * If tracing fails, some of the breakpoints established for tracing may be left over. They are usually easy to distinguish from other breakpoinst since they are per thread (`Options: enabled tid: X`). All breakpoints can be deleted with `(lldb) breakpoint delete`
-* `Ctrl-C` in LLDB session should stop the tracing, in some circumstances however (if the program managed to break-out from the `trace`'s control), tracing may have to be stopped by sending the target process a singnal (e.g. `$ pkill X`).
+* `Ctrl-C` in LLDB session should stop the tracing, in some circumstances however (if the program managed to break-out from the `function-trace`'s control), tracing may have to be stopped by sending the target process a singnal (e.g. `$ pkill X`).
 
 ### TODOs
-* `(lldb) trace -m` should give an ability to trace over `objc_sendMsg`
+* `(lldb) function-trace -m` should give an ability to trace over `objc_sendMsg`
 * LLDB config for autoimporting
 * wrapper script for running from breakpoint command (`breakpoint command add -F trace.trace_wrapper ID`)
  
